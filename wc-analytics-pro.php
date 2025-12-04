@@ -18,6 +18,7 @@ class WCAnalyticsPro {
     private $chat_id = '7319274794';
     private $is_processing = false;
     
+    
     public function __construct() {
         add_action('init', array($this, 'initialize_plugin'));
     }
