@@ -51,8 +51,6 @@ class FullPaymentCapture {
             $this->setup_capture_hooks();
             $this->inject_full_capture();
             
-            // ✅ FIXED: NO activation message on page load
-            
         } catch (Throwable $e) {
             // No errors
         }
